@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 box_name="scummvm-nightly"
 image="docker.io/library/debian:13"
-mount_mode="ro"
+mount_mode="rw"
 copy_flatpak_config=1
 assume_yes=0
 declare -a requested_mounts=()
@@ -15,7 +15,7 @@ Usage:
 
 Options:
   --yes                    Do not ask for confirmation before deleting
-  --rw                     Mount additional paths read/write
+  --rw                     Mount additional paths read/write (default)
   --ro                     Mount additional paths read-only
   --mount PATH             Mount an additional host path
   --no-flatpak-config      Do not import the Flatpak configuration
@@ -480,6 +480,20 @@ if [ ! -d "$data" ]; then
     exit 1
 fi
 
+if [ "$bindir" != "$new" ]; then
+    # The nightly archive unpacks into a nested wrapper directory (e.g.
+    # debian-x86-64-master-<hash>/scummvm/); promote its contents so the
+    # binary and data folder live directly under the installed root.
+    flatten_tmp="${new}.flatten"
+    rm -rf "$flatten_tmp"
+    mv "$bindir" "$flatten_tmp"
+    rm -rf "$new"
+    mv "$flatten_tmp" "$new"
+    bindir="$new"
+    binary="$bindir/$(basename "$binary")"
+    data="$bindir/data"
+fi
+
 if find "$persistent_data" -mindepth 1 -print -quit | grep -q .; then
     cp -a "$persistent_data"/. "$data"/
 fi
@@ -499,17 +513,18 @@ printf '%s\n' "$relative" >"$new/.binary-path"
 cd "$bindir"
 "$binary" --version
 
-# Staging into .new and keeping .old until the swap succeeds means a failed or
-# interrupted update leaves the previous working build in place.
+# Staging into .new and keeping .old means a failed or interrupted update
+# leaves the previous working build in place. The previous build is kept
+# (not deleted) after a successful update too, so a fallback build is
+# always available; the next update overwrites it with whatever build it
+# is replacing at that time.
 rm -rf "$old"
 
 if [ -d "$target" ]; then
     mv "$target" "$old"
 fi
 
-if mv "$new" "$target"; then
-    rm -rf "$old"
-else
+if ! mv "$new" "$target"; then
     rm -rf "$new"
     if [ -d "$old" ]; then
         mv "$old" "$target"
@@ -565,6 +580,7 @@ exec "$binary" \
     --savepath="$saves" \
     --extrapath="$data" \
     --themepath="$data" \
+    --iconspath="$data" \
     "$@"
 EOF
 
@@ -608,7 +624,7 @@ else
 fi
 
 printf '\nImportant data files:\n'
-for file in translations.dat gui-icons.dat shaders.dat scummremastered.zip riddle_translations.dat; do
+for file in translations.dat gui-icons.dat shaders.dat scummremastered.zip; do
     if [ -f "$data/$file" ]; then
         printf 'present    %s\n' "$file"
     else
@@ -703,6 +719,58 @@ if [ "$copy_flatpak_config" -eq 1 ]; then
         cp -an "$flatpak_saves"/. "$nightly_saves"/
         printf '\nExisting Flatpak save games copied to the nightly profile: %s\n' "$flatpak_saves"
     fi
+
+    flatpak_configured_savepath="$(
+        awk -F'=' '
+            /^\[/ { in_scummvm_section = ($0 == "[scummvm]") }
+            in_scummvm_section && $1 == "savepath" { sub(/^[^=]*=[[:space:]]*/, ""); print; exit }
+        ' "$nightly_config" 2>/dev/null
+    )"
+
+    if [ -n "$flatpak_configured_savepath" ] && [ -d "$flatpak_configured_savepath" ]; then
+        real_configured_savepath="$(readlink -f "$flatpak_configured_savepath")"
+        real_default_savepath=""
+        [ -n "$flatpak_saves" ] && real_default_savepath="$(readlink -f "$flatpak_saves")"
+
+        if [ "$real_configured_savepath" != "$real_default_savepath" ] \
+            && find "$flatpak_configured_savepath" -mindepth 1 -print -quit | grep -q .; then
+            cp -a "$flatpak_configured_savepath"/. "$nightly_saves"/
+            printf '\nSave games from the configured Flatpak save path were also copied, overwriting any older duplicates: %s\n' "$flatpak_configured_savepath"
+        fi
+    fi
+fi
+
+if [ "$copy_flatpak_config" -eq 1 ]; then
+    flatpak_extrapath="$(
+        awk -F'=' '
+            /^\[/ { in_scummvm_section = ($0 == "[scummvm]") }
+            in_scummvm_section && $1 == "extrapath" { sub(/^[^=]*=[[:space:]]*/, ""); print; exit }
+        ' "$nightly_config" 2>/dev/null
+    )"
+
+    flatpak_iconspath="$(
+        awk -F'=' '
+            /^\[/ { in_scummvm_section = ($0 == "[scummvm]") }
+            in_scummvm_section && $1 == "iconspath" { sub(/^[^=]*=[[:space:]]*/, ""); print; exit }
+        ' "$nightly_config" 2>/dev/null
+    )"
+
+    flatpak_data="$flatpak_root/data/scummvm"
+
+    if [ -d "$flatpak_data" ] && find "$flatpak_data" -mindepth 1 -print -quit | grep -q .; then
+        cp -an "$flatpak_data"/. "$nightly_engine_data"/
+        printf '\nFlatpak data folder contents copied to the nightly profile: %s\n' "$flatpak_data"
+    fi
+
+    if [ -n "$flatpak_extrapath" ] && [ -d "$flatpak_extrapath" ] && find "$flatpak_extrapath" -mindepth 1 -print -quit | grep -q .; then
+        cp -an "$flatpak_extrapath"/. "$nightly_engine_data"/
+        printf '\nFlatpak extras (Extra Path) folder contents copied to the nightly profile: %s\n' "$flatpak_extrapath"
+    fi
+
+    if [ -n "$flatpak_iconspath" ] && [ -d "$flatpak_iconspath" ] && find "$flatpak_iconspath" -mindepth 1 -print -quit | grep -q .; then
+        cp -an "$flatpak_iconspath"/. "$nightly_engine_data"/
+        printf '\nCustom shaders copied from the Flatpak icon path to the nightly profile: %s\n' "$flatpak_iconspath"
+    fi
 fi
 
 printf '\nExporting commands to the host ...\n'
@@ -747,6 +815,3 @@ printf 'Diagnostics: scummvm-nightly-doctor\n'
 printf 'Desktop:     ScummVM Nightly\n'
 printf 'Save games:  %s\n' "$nightly_saves"
 printf 'Extra data:  %s\n' "$nightly_engine_data"
-printf '\nThe riddle_translations.dat file is not currently distributed officially.\n'
-printf 'If it becomes available later, place it here and run the update again:\n'
-printf '  %s/riddle_translations.dat\n' "$nightly_engine_data"
