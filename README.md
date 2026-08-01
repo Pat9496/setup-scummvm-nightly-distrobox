@@ -278,12 +278,19 @@ The setup removes only the Distrobox, the nightly program directory and its down
 
 ## Additional Host Mounts
 
-Without explicit `--mount` options, the script adds every existing path from this list:
+Without explicit `--mount` options, the script discovers candidate directories automatically:
 
-- `/run/media/<current-user>`
-- `/media/<current-user>`
+- every existing subdirectory of `/run/media` (not just one named after the current user — automount services can use other names, such as `system` or `media-automount`)
+- every existing subdirectory of `/media`
 - `/mnt`
 - `/var/mnt`
+
+When run interactively, selection happens in two steps:
+
+1. The discovered top-level directories are listed and you choose which ones to use by number (press Enter for all, or type `none`).
+2. For each one chosen, its own subdirectories are listed the same way, since the actual drives usually live one level below the automount root (for example `/run/media/media-automount/Games`) rather than being the root itself. A root with no subdirectories is mounted as-is.
+
+With `--yes`, or when nothing was discovered, everything found at every level is mounted automatically without a prompt.
 
 The paths are mounted at the same locations inside the Distrobox.
 
