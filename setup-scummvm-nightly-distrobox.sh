@@ -383,37 +383,6 @@ run_in_box() {
         -- "$@"
 }
 
-# Removes per-game "savepath=" overrides that point at the nightly saves
-# directory itself, so those games fall back to the default save path
-# instead of a stale per-game path baked in from an earlier config.
-strip_nightly_savepath_overrides() {
-    local config_file="$1"
-    local save_path="$2"
-    local tmp_file
-
-    [ -f "$config_file" ] || return 0
-
-    tmp_file="$(mktemp "${config_file}.XXXXXX")"
-
-    awk -v save_path="$save_path" '
-        /^\[/ { in_scummvm_section = ($0 == "[scummvm]") }
-        !in_scummvm_section && $0 ~ /^savepath[[:space:]]*=/ {
-            value = $0
-            sub(/^savepath[[:space:]]*=[[:space:]]*/, "", value)
-            sub(/[[:space:]]+$/, "", value)
-            sub(/\/$/, "", value)
-            if (value == save_path) next
-        }
-        { print }
-    ' "$config_file" >"$tmp_file"
-
-    if ! cmp -s "$config_file" "$tmp_file"; then
-        printf 'Removed per-game save-path overrides pointing at the nightly saves folder.\n'
-    fi
-
-    mv "$tmp_file" "$config_file"
-}
-
 printf '\nInitializing Distrobox ...\n'
 run_in_box true
 
@@ -704,7 +673,6 @@ if [ "$copy_flatpak_config" -eq 1 ]; then
 
     if [ -n "$flatpak_config" ] && [ -f "$flatpak_config" ]; then
         cp -a "$flatpak_config" "$nightly_config"
-        strip_nightly_savepath_overrides "$nightly_config" "$nightly_saves"
         printf '\nFlatpak configuration copied to the separate nightly profile: %s\n' "$flatpak_config"
     elif [ -f "$nightly_config" ]; then
         printf '\nNo Flatpak configuration found. The existing nightly configuration is preserved.\n'
@@ -715,6 +683,26 @@ elif [ -f "$nightly_config" ]; then
     printf '\nFlatpak import is disabled. The existing nightly configuration is preserved.\n'
 else
     printf '\nFlatpak import is disabled. ScummVM will create a new configuration on first nightly start.\n'
+fi
+
+if [ "$copy_flatpak_config" -eq 1 ]; then
+    flatpak_saves=""
+
+    if [ -d "$flatpak_root/data/scummvm/saves" ]; then
+        flatpak_saves="$flatpak_root/data/scummvm/saves"
+    elif [ -d "$flatpak_root" ]; then
+        flatpak_saves="$(
+            find "$flatpak_root" \
+                -type d \
+                -name saves \
+                -print -quit
+        )"
+    fi
+
+    if [ -n "$flatpak_saves" ] && [ -d "$flatpak_saves" ] && find "$flatpak_saves" -mindepth 1 -print -quit | grep -q .; then
+        cp -an "$flatpak_saves"/. "$nightly_saves"/
+        printf '\nExisting Flatpak save games copied to the nightly profile: %s\n' "$flatpak_saves"
+    fi
 fi
 
 printf '\nExporting commands to the host ...\n'
