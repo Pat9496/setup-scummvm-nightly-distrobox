@@ -23,10 +23,10 @@ Options:
   --image IMAGE            Use a different container image
   --help                   Show this help
 
-Without --mount, existing directories from this list are mounted:
-  /run/media/$USER
-  /mnt
-  /var/mnt
+Without --mount, every existing subdirectory of /run/media and /media is a
+candidate, along with /mnt and /var/mnt. You are prompted to choose which
+discovered directories to mount, unless --yes is given, in which case all
+of them are mounted automatically.
 
 The existing nightly configuration is backed up.
 Existing nightly save games are not deleted.
@@ -155,11 +155,56 @@ declare -a mounts=()
 if [ "${#requested_mounts[@]}" -gt 0 ]; then
     mounts=("${requested_mounts[@]}")
 else
-    for path in "/run/media/$USER" "/mnt" "/var/mnt"; do
-        if [ -d "$path" ]; then
-            mounts+=("$path")
+    declare -a discovered_mounts=()
+
+    # /run/media and /media each hold one subdirectory per automount source;
+    # the subdirectory name depends on the automounter (the logged-in user's
+    # name, a system automount service, etc.) and is not reliably "$USER", so
+    # every existing subdirectory is a candidate instead of assuming one name.
+    for auto_root in /run/media /media; do
+        if [ -d "$auto_root" ]; then
+            for path in "$auto_root"/*; do
+                [ -d "$path" ] && discovered_mounts+=("$path")
+            done
         fi
     done
+
+    for path in /mnt /var/mnt; do
+        [ -d "$path" ] && discovered_mounts+=("$path")
+    done
+
+    if [ "${#discovered_mounts[@]}" -eq 0 ] || [ "$assume_yes" -eq 1 ]; then
+        mounts=("${discovered_mounts[@]-}")
+    else
+        printf '\nDiscovered host directories that can be mounted into the Distrobox:\n'
+        mount_index=1
+        for path in "${discovered_mounts[@]}"; do
+            printf '  %d) %s\n' "$mount_index" "$path"
+            mount_index=$((mount_index + 1))
+        done
+        printf 'Enter the numbers to mount, separated by spaces (default: all, "none" for none): '
+        read -r selection
+
+        if [ -z "$selection" ]; then
+            mounts=("${discovered_mounts[@]}")
+        elif [ "${selection,,}" = "none" ]; then
+            mounts=()
+        else
+            for index in $selection; do
+                case "$index" in
+                    ''|*[!0-9]*)
+                        printf 'Ignoring invalid selection: %s\n' "$index" >&2
+                        continue
+                        ;;
+                esac
+                if [ "$index" -ge 1 ] && [ "$index" -le "${#discovered_mounts[@]}" ]; then
+                    mounts+=("${discovered_mounts[$((index - 1))]}")
+                else
+                    printf 'Ignoring out-of-range selection: %s\n' "$index" >&2
+                fi
+            done
+        fi
+    fi
 fi
 
 declare -A seen_mounts=()
@@ -532,7 +577,18 @@ for file in translations.dat gui-icons.dat shaders.dat scummremastered.zip riddl
 done
 
 printf '\nVisible mount directories:\n'
-for path in "/run/media/$USER" /mnt /var/mnt; do
+for auto_root in /run/media /media; do
+    if [ -d "$auto_root" ]; then
+        for path in "$auto_root"/*; do
+            if [ -d "$path" ]; then
+                printf '%s\n' "$path"
+                find "$path" -mindepth 1 -maxdepth 2 -type d 2>/dev/null | head -n 20
+            fi
+        done
+    fi
+done
+
+for path in /mnt /var/mnt; do
     if [ -d "$path" ]; then
         printf '%s\n' "$path"
         find "$path" -mindepth 1 -maxdepth 2 -type d 2>/dev/null | head -n 20
