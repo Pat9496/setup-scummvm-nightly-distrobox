@@ -383,6 +383,37 @@ run_in_box() {
         -- "$@"
 }
 
+# Removes per-game "savepath=" overrides that point at the nightly saves
+# directory itself, so those games fall back to the default save path
+# instead of a stale per-game path baked in from an earlier config.
+strip_nightly_savepath_overrides() {
+    local config_file="$1"
+    local save_path="$2"
+    local tmp_file
+
+    [ -f "$config_file" ] || return 0
+
+    tmp_file="$(mktemp "${config_file}.XXXXXX")"
+
+    awk -v save_path="$save_path" '
+        /^\[/ { in_scummvm_section = ($0 == "[scummvm]") }
+        !in_scummvm_section && $0 ~ /^savepath[[:space:]]*=/ {
+            value = $0
+            sub(/^savepath[[:space:]]*=[[:space:]]*/, "", value)
+            sub(/[[:space:]]+$/, "", value)
+            sub(/\/$/, "", value)
+            if (value == save_path) next
+        }
+        { print }
+    ' "$config_file" >"$tmp_file"
+
+    if ! cmp -s "$config_file" "$tmp_file"; then
+        printf 'Removed per-game save-path overrides pointing at the nightly saves folder.\n'
+    fi
+
+    mv "$tmp_file" "$config_file"
+}
+
 printf '\nInitializing Distrobox ...\n'
 run_in_box true
 
@@ -673,6 +704,7 @@ if [ "$copy_flatpak_config" -eq 1 ]; then
 
     if [ -n "$flatpak_config" ] && [ -f "$flatpak_config" ]; then
         cp -a "$flatpak_config" "$nightly_config"
+        strip_nightly_savepath_overrides "$nightly_config" "$nightly_saves"
         printf '\nFlatpak configuration copied to the separate nightly profile: %s\n' "$flatpak_config"
     elif [ -f "$nightly_config" ]; then
         printf '\nNo Flatpak configuration found. The existing nightly configuration is preserved.\n'
