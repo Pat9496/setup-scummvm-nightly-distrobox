@@ -4,8 +4,19 @@ This repository-sized setup consists of one Bash script that creates a clean Deb
 
 It is intended for immutable or container-oriented Linux desktops such as Bazzite, Fedora Atomic, Kinoite and Silverblue, but it works for normal Linux user profiles as long as Distrobox and rootless Podman are available.
 
+## Why Use This
+
+If you just want stable, well-tested ScummVM releases, the official Flatpak is strongly suggested instead — that's the better choice for most people, most of the time.
+
+This setup is for when you specifically need the most recent nightly development build: for example, to get support for a game or engine feature that was only just added to ScummVM, or because you're waiting on a fix for a specific game that hasn't made it into a stable release yet. It installs the current ScummVM master nightly build to put you at the edge of ScummVM development.
+
+Nightly builds track active development directly, so things can and sometimes do break — a game that works today may regress tomorrow until it's fixed upstream. Only use this if you're prepared for that trade-off.
+
+The intention of this script is to make that easy and low-friction: install the ScummVM nightly build into an isolated Distrobox, alongside an existing Flatpak install without touching it, and reuse that Flatpak install's configuration, save games, and extras rather than starting over from scratch.
+
 ## Contents
 
+- [Why Use This](#why-use-this)
 - [What the Script Does](#what-the-script-does)
 - [Requirements](#requirements)
 - [Quick Start](#quick-start)
