@@ -24,9 +24,10 @@ Options:
   --help                   Show this help
 
 Without --mount, every existing subdirectory of /run/media and /media is a
-candidate, along with /mnt and /var/mnt. You are prompted to choose which
-discovered directories to mount, unless --yes is given, in which case all
-of them are mounted automatically.
+candidate, along with /mnt and /var/mnt. You are prompted to choose which of
+those to use, then prompted again for each one to choose which of its own
+subdirectories (the actual drives) to mount. With --yes, everything found at
+every level is mounted automatically.
 
 The existing nightly configuration is backed up.
 Existing nightly save games are not deleted.
@@ -152,10 +153,60 @@ protect_flatpak_profile
 
 declare -a mounts=()
 
+# Prompts once for a numbered list of candidates, writing the chosen paths into
+# the array named by $2. Skips the prompt (selects everything) when --yes was
+# given or when there is nothing to choose from.
+select_from_list() {
+    local prompt_label="$1"
+    local -n _select_result="$2"
+    shift 2
+    local -a candidates=("$@")
+    local -a chosen=()
+
+    if [ "${#candidates[@]}" -eq 0 ] || [ "$assume_yes" -eq 1 ]; then
+        _select_result=("${candidates[@]-}")
+        return
+    fi
+
+    printf '\n%s\n' "$prompt_label"
+    local list_index=1
+    local path
+    for path in "${candidates[@]}"; do
+        printf '  %d) %s\n' "$list_index" "$path"
+        list_index=$((list_index + 1))
+    done
+    printf 'Enter the numbers to use, separated by spaces (default: all, "none" for none): '
+    local selection
+    read -r selection
+
+    if [ -z "$selection" ]; then
+        chosen=("${candidates[@]}")
+    elif [ "${selection,,}" = "none" ]; then
+        chosen=()
+    else
+        local index
+        for index in $selection; do
+            case "$index" in
+                ''|*[!0-9]*)
+                    printf 'Ignoring invalid selection: %s\n' "$index" >&2
+                    continue
+                    ;;
+            esac
+            if [ "$index" -ge 1 ] && [ "$index" -le "${#candidates[@]}" ]; then
+                chosen+=("${candidates[$((index - 1))]}")
+            else
+                printf 'Ignoring out-of-range selection: %s\n' "$index" >&2
+            fi
+        done
+    fi
+
+    _select_result=("${chosen[@]-}")
+}
+
 if [ "${#requested_mounts[@]}" -gt 0 ]; then
     mounts=("${requested_mounts[@]}")
 else
-    declare -a discovered_mounts=()
+    declare -a discovered_roots=()
 
     # /run/media and /media each hold one subdirectory per automount source;
     # the subdirectory name depends on the automounter (the logged-in user's
@@ -164,47 +215,36 @@ else
     for auto_root in /run/media /media; do
         if [ -d "$auto_root" ]; then
             for path in "$auto_root"/*; do
-                [ -d "$path" ] && discovered_mounts+=("$path")
+                [ -d "$path" ] && discovered_roots+=("$path")
             done
         fi
     done
 
     for path in /mnt /var/mnt; do
-        [ -d "$path" ] && discovered_mounts+=("$path")
+        [ -d "$path" ] && discovered_roots+=("$path")
     done
 
-    if [ "${#discovered_mounts[@]}" -eq 0 ] || [ "$assume_yes" -eq 1 ]; then
-        mounts=("${discovered_mounts[@]-}")
-    else
-        printf '\nDiscovered host directories that can be mounted into the Distrobox:\n'
-        mount_index=1
-        for path in "${discovered_mounts[@]}"; do
-            printf '  %d) %s\n' "$mount_index" "$path"
-            mount_index=$((mount_index + 1))
-        done
-        printf 'Enter the numbers to mount, separated by spaces (default: all, "none" for none): '
-        read -r selection
+    declare -a selected_roots=()
+    select_from_list 'Discovered host directories that can be mounted into the Distrobox:' selected_roots "${discovered_roots[@]-}"
 
-        if [ -z "$selection" ]; then
-            mounts=("${discovered_mounts[@]}")
-        elif [ "${selection,,}" = "none" ]; then
-            mounts=()
+    # Automount roots are usually just containers; the actual drives are one
+    # level below (e.g. /run/media/media-automount/Games), so drill into each
+    # selected root and offer its own entries instead of mounting it whole.
+    for root in "${selected_roots[@]-}"; do
+        declare -a root_entries=()
+
+        for path in "$root"/*; do
+            [ -d "$path" ] && root_entries+=("$path")
+        done
+
+        if [ "${#root_entries[@]}" -eq 0 ]; then
+            mounts+=("$root")
         else
-            for index in $selection; do
-                case "$index" in
-                    ''|*[!0-9]*)
-                        printf 'Ignoring invalid selection: %s\n' "$index" >&2
-                        continue
-                        ;;
-                esac
-                if [ "$index" -ge 1 ] && [ "$index" -le "${#discovered_mounts[@]}" ]; then
-                    mounts+=("${discovered_mounts[$((index - 1))]}")
-                else
-                    printf 'Ignoring out-of-range selection: %s\n' "$index" >&2
-                fi
-            done
+            declare -a selected_entries=()
+            select_from_list "Found inside $root:" selected_entries "${root_entries[@]}"
+            mounts+=("${selected_entries[@]-}")
         fi
-    fi
+    done
 fi
 
 declare -A seen_mounts=()
