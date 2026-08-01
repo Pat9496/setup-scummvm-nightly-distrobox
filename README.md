@@ -14,11 +14,12 @@ It is intended for immutable or container-oriented Linux desktops such as Bazzit
 - [Automatic Update Behavior](#automatic-update-behavior)
 - [Flatpak Installation Safety](#flatpak-installation-safety)
 - [Flatpak Configuration Import](#flatpak-configuration-import)
+- [Flatpak Save Game Import](#flatpak-save-game-import)
+- [Flatpak Extras Import](#flatpak-extras-import)
 - [Profile and XDG Support](#profile-and-xdg-support)
 - [Default Paths](#default-paths)
 - [Additional Host Mounts](#additional-host-mounts)
 - [MIDI, MT-32, and Text-to-Speech](#midi-mt-32-and-text-to-speech)
-- [The Riddle of Master Lu Notes](#the-riddle-of-master-lu-notes)
 - [Other Console Messages](#other-console-messages)
 - [Troubleshooting](#troubleshooting)
 - [Rebuilding](#rebuilding)
@@ -38,7 +39,7 @@ The script:
 - imports the official Flatpak ScummVM configuration only when that configuration exists
 - preserves an existing nightly configuration when no Flatpak configuration exists
 - preserves save games and persistent engine data
-- creates read-only host mounts for common external-storage locations
+- creates read/write host mounts by default for common external-storage locations
 - creates host commands for launching, updating and diagnosing the installation
 - creates a desktop entry named **ScummVM Nightly**
 - checks for an update every time ScummVM Nightly starts
@@ -95,8 +96,8 @@ The first run downloads a container image, installs Debian packages and download
 | Option | Description |
 | --- | --- |
 | `--yes` | Rebuild without an interactive confirmation. |
-| `--ro` | Mount additional host paths read-only. This is the default. |
-| `--rw` | Mount additional host paths read/write. |
+| `--rw` | Mount additional host paths read/write. This is the default. |
+| `--ro` | Mount additional host paths read-only. |
 | `--mount PATH` | Add a host path. The option may be specified repeatedly. |
 | `--no-flatpak-config` | Do not import the Flatpak ScummVM configuration. |
 | `--box NAME` | Use a different Distrobox name. |
@@ -112,14 +113,14 @@ Example with selected game directories:
   --mount "/mnt/DOS-Games"
 ```
 
-Example with write access to the mounted paths:
+Example with read-only access to the mounted paths:
 
 ```bash
-./setup-scummvm-nightly-distrobox.sh --yes --rw \
+./setup-scummvm-nightly-distrobox.sh --yes --ro \
   --mount "/run/media/$USER/Games"
 ```
 
-Read-only access is recommended for game installations. ScummVM save games are stored separately in the user profile and remain writable.
+Mounts are read/write by default. Pass `--ro` if you'd rather ScummVM not be able to modify files on the mounted paths — this is a reasonable choice for game installations, since ScummVM save games are stored separately in the user profile either way and remain writable regardless of this setting.
 
 ## Host Commands
 
@@ -164,7 +165,6 @@ The doctor reports:
 - configuration status
 - save-directory writability
 - visibility of the configured host mounts
-- the status of the optional `riddle_translations.dat` file
 
 If `~/.local/bin` is not in `PATH`, use the full path or add it to your shell configuration.
 
@@ -183,6 +183,8 @@ When a new build is available, it:
 - replaces the installed build atomically
 
 If validation fails, the installed build remains unchanged.
+
+After a successful update, the previous build is kept on disk rather than deleted, so a working fallback build is always available on disk; the next successful update overwrites that retained copy with whatever build it replaces at that time.
 
 If the update check fails during normal launch, for example because the machine is offline, the launcher starts the last working build. The first installation still requires a successful download because no fallback build exists yet.
 
@@ -222,6 +224,36 @@ The behavior is intentionally conservative:
 Before any possible import, an existing nightly configuration is backed up with a timestamp.
 
 A copied Flatpak configuration may contain document-portal paths under `/run/user/.../doc/...`. These paths may not work outside the Flatpak sandbox. Re-add the affected game directory in ScummVM using its normal host path.
+
+## Flatpak Save Game Import
+
+Alongside the configuration, existing Flatpak save games are copied into the nightly saves folder once, so games default to the correct location with their existing saves already present, instead of relying on any per-game path configuration.
+
+The usual source directory is:
+
+```
+~/.var/app/org.scummvm.ScummVM/data/scummvm/saves
+```
+
+If that exact directory isn't found, the script falls back to searching for a `saves` directory anywhere under the Flatpak profile. Existing files in the nightly saves folder are never overwritten during this first pass — only files that don't already exist there are copied.
+
+The script then checks the `savepath` actually configured in the imported Flatpak configuration. If it points somewhere other than the default directory above, save games are copied from there too — this second pass is allowed to overwrite files, since the explicitly configured path is assumed to hold the more recently used saves.
+
+This runs whenever Flatpak import isn't disabled (`--no-flatpak-config` skips it, the same as the configuration import).
+
+## Flatpak Extras Import
+
+Soundfonts, MT-32/CM-32L ROMs, custom shaders, and any other extra data ScummVM's Flatpak install has accumulated are also picked up and copied wholesale into the persistent engine-data directory, which every nightly build (and rebuild) automatically picks up. Nothing already present in the nightly profile is ever overwritten by this step.
+
+Three source directories are copied in full, whichever of them exist and contain anything:
+
+- `~/.var/app/org.scummvm.ScummVM/data/scummvm` — ScummVM's own Flatpak data folder. This is where soundfonts, ROMs, or shader/icon packs typically end up if the Flatpak install was left on its default paths (for example, packs downloaded via ScummVM's own "Update Shaders" button land here unless the Icon Path was customized).
+- The Extra Path directory declared in the imported configuration, if one was explicitly set (ScummVM's own convention for soundfonts, MT-32/CM-32L ROMs, and other misc extra files).
+- The Icon Path directory declared in the imported configuration, if one was explicitly set (ScummVM's own convention for shader and icon packs — a separate setting from Extra Path, not a typo).
+
+Because whole directories are copied as-is rather than filtered by file type, internal folder structure is preserved — this matters for shader packs, since ScummVM's `.glslp` presets reference sibling files by relative path. A side effect is that if the Flatpak data folder still has its `saves` subdirectory, a redundant copy of it may also land in the engine-data directory; this is harmless, since ScummVM does not look for save games there.
+
+Like the other Flatpak imports, this runs whenever Flatpak import isn't disabled (`--no-flatpak-config` skips it too).
 
 ## Profile and XDG Support
 
@@ -276,6 +308,8 @@ With standard XDG settings, the setup uses:
 
 The setup removes only the Distrobox, the nightly program directory and its download cache. It does not remove the configuration, saves or persistent engine-data directory.
 
+The official nightly archive unpacks into a nested wrapper directory (for example `debian-x86-64-master-<hash>/scummvm/`). The updater flattens this automatically, so the `scummvm` binary and its `data` folder end up directly under the nightly program files path above rather than several levels deep.
+
 ## Additional Host Mounts
 
 Without explicit `--mount` options, the script discovers candidate directories automatically:
@@ -310,25 +344,9 @@ The container installs FluidSynth. When Debian's configured repositories provide
 
 In ScummVM, select FluidSynth or General MIDI in the MIDI settings. If necessary, point ScummVM to the installed `.sf2` file under `/usr/share/sounds/sf2/` inside the Distrobox.
 
-MT-32 emulation requires legally obtained MT-32 or CM-32L ROM files. These ROMs are not downloaded or supplied by this script.
+MT-32 emulation requires legally obtained MT-32 or CM-32L ROM files. These ROMs are not downloaded or supplied by this script, but existing ones already configured in a Flatpak install are copied over automatically; see [Flatpak Extras Import](#flatpak-extras-import).
 
 Speech Dispatcher and its eSpeak NG output module are installed. The launcher attempts to start Speech Dispatcher automatically. A failure affects only ScummVM's optional text-to-speech feature, not normal game speech or audio.
-
-## The Riddle of Master Lu Notes
-
-The script supports the current ScummVM M4 implementation but does not modify the game itself.
-
-### `riddle_translations.dat`
-
-This file is optional and is not generated by the setup. Without it, the game remains playable, but ScummVM's additional M4 subtitles are unavailable.
-
-If an official copy becomes available, place it in:
-
-```
-~/.local/share/scummvm-nightly/engine-data/riddle_translations.dat
-```
-
-The updater copies files from this persistent directory into every new nightly build. It also copies them into the current build when the nightly archive has not changed.
 
 ## Other Console Messages
 
@@ -362,10 +380,10 @@ Then rebuild with the exact path:
 
 ### A Mounted Directory Is Visible but Cannot Be Modified
 
-The default mode is read-only. Rebuild with `--rw` only when write access is required:
+Mounts are read/write by default; this happens if the rebuild explicitly used `--ro`. Rebuild without it to restore write access:
 
 ```bash
-./setup-scummvm-nightly-distrobox.sh --yes --rw --mount "/exact/host/path"
+./setup-scummvm-nightly-distrobox.sh --yes --mount "/exact/host/path"
 ```
 
 ### Automatic Update Fails but ScummVM Still Starts
