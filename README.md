@@ -52,7 +52,7 @@ The script:
 - imports the official Flatpak ScummVM configuration only when that configuration exists
 - preserves an existing nightly configuration when no Flatpak configuration exists
 - preserves save games and persistent engine data
-- creates read/write host mounts by default for common external-storage locations
+- optionally mounts additional host directories into the Distrobox when explicitly requested, read-only by default
 - creates host commands for launching, updating and diagnosing the installation
 - creates a desktop entry named **ScummVM Nightly**
 - checks for an update every time ScummVM Nightly starts
@@ -111,8 +111,9 @@ The first run downloads a container image, installs Debian packages and download
 | Option | Description |
 | --- | --- |
 | `--yes` | Rebuild without an interactive confirmation. |
-| `--rw` | Mount additional host paths read/write. This is the default. |
-| `--ro` | Mount additional host paths read-only. |
+| `--discover-mounts` | Interactively discover host directories to mount (see [Additional Host Mounts](#additional-host-mounts)). Off by default. |
+| `--rw` | Mount additional host paths read/write. |
+| `--ro` | Mount additional host paths read-only. This is the default for custom mounts. |
 | `--mount PATH` | Add a host path. The option may be specified repeatedly. |
 | `--no-flatpak-config` | Do not import the Flatpak ScummVM configuration. |
 | `--box NAME` | Use a different Distrobox name. |
@@ -120,7 +121,7 @@ The first run downloads a container image, installs Debian packages and download
 | `--nightly-url URL` | Override the official nightly archive URL. The archive must use the expected `.tar.xz` layout. |
 | `--help` | Show the built-in help. |
 
-Example with selected game directories:
+Example with selected game directories, mounted read-only by default:
 
 ```bash
 ./setup-scummvm-nightly-distrobox.sh --yes \
@@ -128,14 +129,20 @@ Example with selected game directories:
   --mount "/mnt/DOS-Games"
 ```
 
-Example with read-only access to the mounted paths:
+Example with read/write access to the mounted paths:
 
 ```bash
-./setup-scummvm-nightly-distrobox.sh --yes --ro \
+./setup-scummvm-nightly-distrobox.sh --yes --rw \
   --mount "/run/media/$USER/Games"
 ```
 
-Mounts are read/write by default. Pass `--ro` if you'd rather ScummVM not be able to modify files on the mounted paths — this is a reasonable choice for game installations, since ScummVM save games are stored separately in the user profile either way and remain writable regardless of this setting.
+Example using interactive discovery instead of naming paths explicitly:
+
+```bash
+./setup-scummvm-nightly-distrobox.sh --discover-mounts
+```
+
+Custom mounts (added with `--mount` or `--discover-mounts`) are read-only by default. Pass `--rw` if ScummVM needs to write to those specific paths — this is rarely necessary, since save games are stored separately in the user profile and remain writable regardless of this setting. Without `--mount` or `--discover-mounts`, no custom mounts are added at all, and none are needed for most setups: Distrobox already gives every container broad read/write access to the host filesystem, including common external drives, with no configuration here.
 
 ## Host Commands
 
@@ -328,21 +335,25 @@ The official nightly archive unpacks into a nested wrapper directory (for exampl
 
 ## Additional Host Mounts
 
-Without explicit `--mount` options, the script discovers candidate directories automatically:
+Distrobox already gives every container broad read/write access to most of the host filesystem, including common external-storage locations, with no configuration here. Most setups need nothing more, and custom mounting is off by default.
+
+Custom mounting exists for finer control: enforcing read-only access, exposing only specific drives instead of everything Distrobox mounts by default, and reliable visibility for drives connected *after* the container was already created. (Distrobox's own default mounts are set up per-drive at container-creation time, so a drive plugged in later may not appear without recreating the container; this script's custom mounts instead bind the parent directory itself, so anything mounted under it afterward shows up immediately — see [Podman bind mounts and mount propagation](#upstream-references).)
+
+Use `--mount PATH` to add a specific path, or `--discover-mounts` to enable interactive discovery of candidate directories instead:
 
 - every existing subdirectory of `/run/media` (not just one named after the current user — automount services can use other names, such as `system` or `media-automount`)
 - every existing subdirectory of `/media`
 - `/mnt`
 - `/var/mnt`
 
-When run interactively, selection happens in two steps:
+When run with `--discover-mounts` interactively (without `--yes`), selection happens in two steps:
 
 1. The discovered top-level directories are listed and you choose which ones to use by number (press Enter for all, or type `none`).
 2. For each one chosen, its own subdirectories are listed the same way, since the actual drives usually live one level below the automount root (for example `/run/media/media-automount/Games`) rather than being the root itself. A root with no subdirectories is mounted as-is.
 
-With `--yes`, or when nothing was discovered, everything found at every level is mounted automatically without a prompt.
+With `--discover-mounts --yes`, everything found at every level is mounted automatically without a prompt.
 
-The paths are mounted at the same locations inside the Distrobox.
+The paths are mounted at the same locations inside the Distrobox, read-only by default; pass `--rw` for read/write access.
 
 For Podman, the setup uses recursive bind mounts so already mounted filesystems below these directories are visible. When the host mount propagation permits it, `rslave` is added so later host-side mounts can also propagate into the container without propagating container-side mounts back to the host.
 
@@ -371,6 +382,7 @@ These messages are normally non-fatal:
 - `Using game controller: Generic X-Box pad` appearing twice
 - a missing Speech Dispatcher warning when text-to-speech is unused
 - `TODO: digi_change_panning`, which reflects an unfinished M4 audio-panning function
+- `WARNING: SearchSet::add: archive 'shaders.dat' already present!` (or `gui-icons.dat`, or similar) — the launcher intentionally passes the same data directory for `--extrapath`, `--themepath`, and `--iconspath` so everything imported from the Flatpak profile is discoverable regardless of which of the three ScummVM searches; ScummVM notices the same file was already registered via another path and skips re-adding it instead of erroring
 
 The setup creates an empty timestamps file in the save directory to avoid the initial cloud-timestamp warning.
 
@@ -402,11 +414,13 @@ Then rebuild with the exact path:
 
 ### A Mounted Directory Is Visible but Cannot Be Modified
 
-Mounts are read/write by default; this happens if the rebuild explicitly used `--ro`. Rebuild without it to restore write access:
+Custom mounts (`--mount` or `--discover-mounts`) are read-only by default. Rebuild with `--rw` to allow writes:
 
 ```bash
-./setup-scummvm-nightly-distrobox.sh --yes --mount "/exact/host/path"
+./setup-scummvm-nightly-distrobox.sh --yes --rw --mount "/exact/host/path"
 ```
+
+If you didn't use `--mount` or `--discover-mounts` at all, this is Distrobox's own default host mount instead, which this script doesn't control — see [Additional Host Mounts](#additional-host-mounts).
 
 ### Automatic Update Fails but ScummVM Still Starts
 
