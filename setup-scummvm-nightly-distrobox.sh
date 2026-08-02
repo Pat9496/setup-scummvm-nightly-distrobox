@@ -189,6 +189,7 @@ protect_flatpak_profile
 
 # Prints the value of the given key in $nightly_config's [scummvm] section, or nothing if absent.
 read_ini_value() {
+    [ -f "$nightly_config" ] || return 0
     awk -F'=' -v field="$1" '
         /^\[/ { in_scummvm_section = ($0 == "[scummvm]") }
         in_scummvm_section && $1 == field { sub(/^[^=]*=[[:space:]]*/, ""); print; exit }
@@ -491,7 +492,7 @@ if [ -f "$archive" ]; then
 fi
 
 printf 'Checking for a current ScummVM nightly build ...\n'
-status="$(curl "${curl_args[@]}" "$url")"
+status="$(curl "${curl_args[@]}" "$url")" || true
 
 case "$status" in
     200)
@@ -556,7 +557,7 @@ if find "$persistent_data" -mindepth 1 -print -quit | grep -q .; then
 fi
 
 printf 'Checking for missing shared libraries ...\n'
-missing="$(ldd "$binary" 2>/dev/null | awk '/not found/{print $1}')"
+missing="$(ldd "$binary" 2>/dev/null | awk '/not found/{print $1}')" || true
 
 if [ -n "$missing" ]; then
     printf 'The nightly build is missing libraries:\n%s\n' "$missing" >&2
@@ -677,7 +678,7 @@ cd "$bindir"
 "$binary" --version
 
 printf '\nMissing libraries:\n'
-missing="$(ldd "$binary" 2>/dev/null | awk '/not found/{print $1}')"
+missing="$(ldd "$binary" 2>/dev/null | awk '/not found/{print $1}')" || true
 
 if [ -n "$missing" ]; then
     printf '%s\n' "$missing"
