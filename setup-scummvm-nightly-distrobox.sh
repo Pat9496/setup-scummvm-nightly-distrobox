@@ -688,7 +688,7 @@ if [ "$copy_flatpak_config" -eq 1 ]; then
     fi
 
     if [ -n "$flatpak_config" ] && [ -f "$flatpak_config" ]; then
-        cp -a "$flatpak_config" "$nightly_config"
+        cp -au "$flatpak_config" "$nightly_config"
         printf '\nFlatpak configuration copied to the separate nightly profile: %s\n' "$flatpak_config"
     elif [ -f "$nightly_config" ]; then
         printf '\nNo Flatpak configuration found. The existing nightly configuration is preserved.\n'
@@ -716,7 +716,7 @@ if [ "$copy_flatpak_config" -eq 1 ]; then
     fi
 
     if [ -n "$flatpak_saves" ] && [ -d "$flatpak_saves" ] && find "$flatpak_saves" -mindepth 1 -print -quit | grep -q .; then
-        cp -an "$flatpak_saves"/. "$nightly_saves"/
+        cp -au "$flatpak_saves"/. "$nightly_saves"/
         printf '\nExisting Flatpak save games copied to the nightly profile: %s\n' "$flatpak_saves"
     fi
 
@@ -734,7 +734,7 @@ if [ "$copy_flatpak_config" -eq 1 ]; then
 
         if [ "$real_configured_savepath" != "$real_default_savepath" ] \
             && find "$flatpak_configured_savepath" -mindepth 1 -print -quit | grep -q .; then
-            cp -a "$flatpak_configured_savepath"/. "$nightly_saves"/
+            cp -au "$flatpak_configured_savepath"/. "$nightly_saves"/
             printf '\nSave games from the configured Flatpak save path were also copied, overwriting any older duplicates: %s\n' "$flatpak_configured_savepath"
         fi
     fi
@@ -758,17 +758,17 @@ if [ "$copy_flatpak_config" -eq 1 ]; then
     flatpak_data="$flatpak_root/data/scummvm"
 
     if [ -d "$flatpak_data" ] && find "$flatpak_data" -mindepth 1 -print -quit | grep -q .; then
-        cp -an "$flatpak_data"/. "$nightly_engine_data"/
+        cp -au "$flatpak_data"/. "$nightly_engine_data"/
         printf '\nFlatpak data folder contents copied to the nightly profile: %s\n' "$flatpak_data"
     fi
 
     if [ -n "$flatpak_extrapath" ] && [ -d "$flatpak_extrapath" ] && find "$flatpak_extrapath" -mindepth 1 -print -quit | grep -q .; then
-        cp -an "$flatpak_extrapath"/. "$nightly_engine_data"/
+        cp -au "$flatpak_extrapath"/. "$nightly_engine_data"/
         printf '\nFlatpak extras (Extra Path) folder contents copied to the nightly profile: %s\n' "$flatpak_extrapath"
     fi
 
     if [ -n "$flatpak_iconspath" ] && [ -d "$flatpak_iconspath" ] && find "$flatpak_iconspath" -mindepth 1 -print -quit | grep -q .; then
-        cp -an "$flatpak_iconspath"/. "$nightly_engine_data"/
+        cp -au "$flatpak_iconspath"/. "$nightly_engine_data"/
         printf '\nCustom shaders copied from the Flatpak icon path to the nightly profile: %s\n' "$flatpak_iconspath"
     fi
 fi
