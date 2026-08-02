@@ -638,7 +638,7 @@ for auto_root in /run/media /media; do
         for path in "$auto_root"/*; do
             if [ -d "$path" ]; then
                 printf '%s\n' "$path"
-                find "$path" -mindepth 1 -maxdepth 2 -type d 2>/dev/null | head -n 20
+                find "$path" -mindepth 1 -maxdepth 2 -type d 2>/dev/null | head -n 20 || true
             fi
         done
     fi
@@ -647,7 +647,7 @@ done
 for path in /mnt /var/mnt; do
     if [ -d "$path" ]; then
         printf '%s\n' "$path"
-        find "$path" -mindepth 1 -maxdepth 2 -type d 2>/dev/null | head -n 20
+        find "$path" -mindepth 1 -maxdepth 2 -type d 2>/dev/null | head -n 20 || true
     fi
 done
 EOF
