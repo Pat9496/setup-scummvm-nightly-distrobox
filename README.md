@@ -2,7 +2,7 @@
 
 This repository-sized setup consists of one Bash script that creates a clean Debian 13 Distrobox for the current ScummVM master nightly build.
 
-It is intended for immutable or container-oriented Linux desktops such as Bazzite, Fedora Atomic, Kinoite and Silverblue, but it works for normal Linux user profiles as long as Distrobox and rootless Podman are available.
+It works on any Linux distro with Distrobox and rootless Podman available — nothing in the script is specific to any one distribution or package manager. It's especially useful on immutable or container-oriented desktops such as Bazzite, Fedora Atomic, Kinoite and Silverblue, where installing packages directly onto the host isn't an option, but it works just as well on a normal Linux user profile.
 
 ## Why Use This
 
@@ -36,6 +36,8 @@ The intention of this script is to make that easy and low-friction: install the 
 - [Rebuilding](#rebuilding)
 - [Uninstalling](#uninstalling)
 - [Upstream References](#upstream-references)
+- [Contributing](#contributing)
+- [License](#license)
 
 ## What the Script Does
 
@@ -69,6 +71,8 @@ Run the setup on the Linux host as a normal desktop user.
 - standard GNU utilities such as `find`, `awk` and `readlink`
 
 `grep`, `tar` and `ldd` are also used, but only inside the Distrobox, where they are guaranteed by Debian's essential package set — no separate host installation is needed.
+
+Distrobox and Podman aren't preinstalled on every distro. If either is missing, see [Distrobox's installation instructions](https://distrobox.it/#installation) (it covers most package managers) and [Podman's installation instructions](https://podman.io/docs/installation) for your distro's package manager.
 
 ### The Script Deliberately Refuses to Run
 
@@ -227,7 +231,8 @@ The usual source file is:
 
 The behavior is intentionally conservative:
 
-- **Flatpak configuration exists**: it is copied to the nightly profile.
+- **Flatpak configuration exists and is newer than the current nightly configuration (or none exists yet)**: it is copied to the nightly profile.
+- **Flatpak configuration exists but is not newer**: the existing nightly configuration is retained.
 - **Flatpak configuration does not exist**: an existing nightly configuration is retained.
 - **Neither configuration exists**: ScummVM creates a new one on first launch.
 - **`--no-flatpak-config` is used**: the Flatpak file is ignored, but an existing nightly configuration is still retained.
@@ -246,15 +251,15 @@ The usual source directory is:
 ~/.var/app/org.scummvm.ScummVM/data/scummvm/saves
 ```
 
-If that exact directory isn't found, the script falls back to searching for a `saves` directory anywhere under the Flatpak profile. Existing files in the nightly saves folder are never overwritten during this first pass — only files that don't already exist there are copied.
+If that exact directory isn't found, the script falls back to searching for a `saves` directory anywhere under the Flatpak profile. Only files that don't already exist in the nightly saves folder, or that are newer in the Flatpak folder, are copied during this first pass.
 
-The script then checks the `savepath` actually configured in the imported Flatpak configuration. If it points somewhere other than the default directory above, save games are copied from there too — this second pass is allowed to overwrite files, since the explicitly configured path is assumed to hold the more recently used saves.
+The script then checks the `savepath` actually configured in the imported Flatpak configuration. If it points somewhere other than the default directory above, save games are copied from there too — this second pass also only copies files that are newer than what's already in the nightly saves folder.
 
 This runs whenever Flatpak import isn't disabled (`--no-flatpak-config` skips it, the same as the configuration import).
 
 ## Flatpak Extras Import
 
-Soundfonts, MT-32/CM-32L ROMs, custom shaders, and any other extra data ScummVM's Flatpak install has accumulated are also picked up and copied wholesale into the persistent engine-data directory, which every nightly build (and rebuild) automatically picks up. Nothing already present in the nightly profile is ever overwritten by this step.
+Soundfonts, MT-32/CM-32L ROMs, custom shaders, and any other extra data ScummVM's Flatpak install has accumulated are also picked up and copied wholesale into the persistent engine-data directory, which every nightly build (and rebuild) automatically picks up. Only files that don't already exist there, or that are newer in the Flatpak folder, overwrite anything during this step.
 
 Three source directories are copied in full, whichever of them exist and contain anything:
 
@@ -371,6 +376,12 @@ The setup creates an empty timestamps file in the save directory to avoid the in
 
 ## Troubleshooting
 
+### "Podman is unavailable for the current user" on a Fresh Distro Install
+
+Rootless Podman needs subordinate UID/GID ranges configured for the current user (`/etc/subuid` and `/etc/subgid`); most distro Podman packages set these up automatically, but a manual or minimal install may not.
+
+On Ubuntu 24.04 and newer, and other distros that adopted the same default, AppArmor's restriction on unprivileged user namespaces can also block rootless Podman (and Distrobox) even when everything above is configured correctly. If `podman info` or `distrobox create` fails with a user-namespace or AppArmor-related error, check your distro's documentation for allowing unprivileged user namespaces for Podman.
+
 ### The Setup Appears to Stop During Package Installation
 
 Package installation and the roughly 100 MB nightly download are the longest steps. The script prints the current high-level operation. Do not run a second setup concurrently.
@@ -465,7 +476,17 @@ Adjust these commands when custom XDG paths or environment overrides were used.
 
 ## Upstream References
 
+- [Distrobox installation](https://distrobox.it/#installation)
 - [Distrobox create and additional volumes](https://distrobox.it/usage/distrobox-create/)
 - [Distrobox enter and headless commands](https://distrobox.it/usage/distrobox-enter/)
+- [Podman installation](https://podman.io/docs/installation)
 - [Podman bind mounts and mount propagation](https://docs.podman.io/en/latest/markdown/podman-run.1.html)
 - [ScummVM master nightly builds](https://buildbot.scummvm.org/dailybuilds/master/)
+
+## Contributing
+
+Bug reports, feature suggestions, and pull requests are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).
