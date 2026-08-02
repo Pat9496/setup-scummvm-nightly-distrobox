@@ -3,9 +3,10 @@ set -Eeuo pipefail
 
 box_name="scummvm-nightly"
 image="docker.io/library/debian:13"
-mount_mode="rw"
+mount_mode="ro"
 copy_flatpak_config=1
 assume_yes=0
+discover_mounts=0
 declare -a requested_mounts=()
 
 usage() {
@@ -15,19 +16,32 @@ Usage:
 
 Options:
   --yes                    Do not ask for confirmation before deleting
-  --rw                     Mount additional paths read/write (default)
-  --ro                     Mount additional paths read-only
+  --discover-mounts        Scan /run/media, /media, /mnt and /var/mnt for
+                           mountable directories and prompt to choose (see
+                           --mount)
+  --rw                     Mount additional paths read/write
+  --ro                     Mount additional paths read-only (default for custom mounts)
   --mount PATH             Mount an additional host path
   --no-flatpak-config      Do not import the Flatpak configuration
   --box NAME               Use a different Distrobox name
   --image IMAGE            Use a different container image
   --help                   Show this help
 
-Without --mount, every existing subdirectory of /run/media and /media is a
-candidate, along with /mnt and /var/mnt. You are prompted to choose which of
-those to use, then prompted again for each one to choose which of its own
-subdirectories (the actual drives) to mount. With --yes, everything found at
-every level is mounted automatically.
+Without --mount or --discover-mounts, no additional paths are mounted at
+all. Distrobox already gives every container broad read/write access to the
+host filesystem, including common external drives, without any
+configuration here.
+
+Use --mount PATH to add a specific host path, or --discover-mounts to
+trigger interactive discovery instead: every existing subdirectory of
+/run/media and /media is a candidate, along with /mnt and /var/mnt. You are
+prompted to choose which of those to use, then prompted again for each one
+to choose which of its own subdirectories (the actual drives) to mount.
+With --yes, everything found at every level is mounted automatically
+instead of prompting.
+
+Paths added with --mount or --discover-mounts are read-only by default;
+pass --rw to make them read/write instead.
 
 The existing nightly configuration is backed up.
 Existing nightly save games are not deleted.
@@ -38,6 +52,10 @@ while [ "$#" -gt 0 ]; do
     case "$1" in
         --yes)
             assume_yes=1
+            shift
+            ;;
+        --discover-mounts)
+            discover_mounts=1
             shift
             ;;
         --rw)
@@ -88,11 +106,19 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 
+# Running as root would create root-owned files under paths that must stay
+# user-owned (the config, cache, and data directories under $HOME).
+if [ "$(id -u)" -eq 0 ]; then
+    printf 'This script must not be run as root.\n' >&2
+    exit 1
+fi
+
 if [ -n "${CONTAINER_ID:-}" ]; then
     printf 'This script must be run on the host, not inside a Distrobox.\n' >&2
     exit 1
 fi
 
+printf 'Checking required host commands ...\n'
 for command_name in distrobox podman curl find readlink awk; do
     if ! command -v "$command_name" >/dev/null 2>&1; then
         printf 'Required command missing: %s\n' "$command_name" >&2
@@ -151,6 +177,19 @@ protect_flatpak_profile() {
 
 protect_flatpak_profile
 
+# Prints the value of the given key in $nightly_config's [scummvm] section, or nothing if absent.
+read_ini_value() {
+    awk -F'=' -v field="$1" '
+        /^\[/ { in_scummvm_section = ($0 == "[scummvm]") }
+        in_scummvm_section && $1 == field { sub(/^[^=]*=[[:space:]]*/, ""); print; exit }
+    ' "$nightly_config" 2>/dev/null
+}
+
+# True if $1 is a directory and contains at least one entry (including dotfiles).
+dir_has_content() {
+    [ -d "$1" ] && find "$1" -mindepth 1 -print -quit | grep -q .
+}
+
 declare -a mounts=()
 
 # Prompts once for a numbered list of candidates, writing the chosen paths into
@@ -164,7 +203,7 @@ select_from_list() {
     local -a chosen=()
 
     if [ "${#candidates[@]}" -eq 0 ] || [ "$assume_yes" -eq 1 ]; then
-        _select_result=("${candidates[@]-}")
+        _select_result=("${candidates[@]+"${candidates[@]}"}")
         return
     fi
 
@@ -200,12 +239,12 @@ select_from_list() {
         done
     fi
 
-    _select_result=("${chosen[@]-}")
+    _select_result=("${chosen[@]+"${chosen[@]}"}")
 }
 
 if [ "${#requested_mounts[@]}" -gt 0 ]; then
     mounts=("${requested_mounts[@]}")
-else
+elif [ "$discover_mounts" -eq 1 ]; then
     declare -a discovered_roots=()
 
     # /run/media and /media each hold one subdirectory per automount source;
@@ -225,12 +264,12 @@ else
     done
 
     declare -a selected_roots=()
-    select_from_list 'Discovered host directories that can be mounted into the Distrobox:' selected_roots "${discovered_roots[@]-}"
+    select_from_list 'Discovered host directories that can be mounted into the Distrobox:' selected_roots "${discovered_roots[@]+"${discovered_roots[@]}"}"
 
     # Automount roots are usually just containers; the actual drives are one
     # level below (e.g. /run/media/media-automount/Games), so drill into each
     # selected root and offer its own entries instead of mounting it whole.
-    for root in "${selected_roots[@]-}"; do
+    for root in "${selected_roots[@]+"${selected_roots[@]}"}"; do
         declare -a root_entries=()
 
         for path in "$root"/*; do
@@ -242,16 +281,19 @@ else
         else
             declare -a selected_entries=()
             select_from_list "Found inside $root:" selected_entries "${root_entries[@]}"
-            mounts+=("${selected_entries[@]-}")
+            mounts+=("${selected_entries[@]+"${selected_entries[@]}"}")
         fi
     done
 fi
 
+# A path can be discovered twice (e.g. reachable via a symlink and its
+# resolved target, or listed under two different candidate roots); dedup by
+# real path so it is not bind-mounted more than once.
 declare -A seen_mounts=()
 declare -a normalized_mounts=()
 
-# "${arr[@]-}" avoids Bash's pre-4.4 nounset bug on an empty array (the script's minimum documented Bash version is 4).
-for path in "${mounts[@]-}"; do
+# "${arr[@]+"${arr[@]}"}" safely expands a possibly-empty array under `set -u` even on Bash < 4.4 (the script's minimum documented Bash version is 4) — plain "${arr[@]-}" is broken: it substitutes one spurious empty-string element instead of zero when the array is genuinely empty, on every Bash version.
+for path in "${mounts[@]+"${mounts[@]}"}"; do
     if [ ! -d "$path" ]; then
         printf 'Mount path does not exist: %s\n' "$path" >&2
         exit 1
@@ -277,16 +319,16 @@ mapfile -t existing_boxes < <(
 printf '\nScummVM Nightly will be fully rebuilt.\n'
 printf 'Distrobox:        %s\n' "$box_name"
 printf 'Image:            %s\n' "$image"
-printf 'Mount mode:       %s\n' "$mount_mode"
 printf 'Configuration:    %s\n' "$nightly_config"
 printf 'Save games:       %s\n' "$nightly_saves"
 printf 'Nightly files:    %s\n' "$nightly_root"
 
 if [ "${#normalized_mounts[@]}" -gt 0 ]; then
+    printf 'Mount mode:       %s\n' "$mount_mode"
     printf 'Additional mounts:\n'
     printf '  %s\n' "${normalized_mounts[@]}"
 else
-    printf 'Additional mounts: none\n'
+    printf 'Additional mounts: none (Distrobox provides its own default host access)\n'
 fi
 
 if [ "${#existing_boxes[@]}" -gt 0 ]; then
@@ -315,6 +357,7 @@ cleanup_stage() {
 
 trap cleanup_stage EXIT
 
+printf '\nPreparing profile directories ...\n'
 mkdir -p \
     "$stage" \
     "$nightly_config_dir" \
@@ -332,13 +375,14 @@ if [ -f "$nightly_config" ]; then
     printf '\nConfiguration backed up: %s\n' "$config_backup"
 fi
 
-# "${arr[@]-}" avoids Bash's pre-4.4 nounset bug on an empty array (the script's minimum documented Bash version is 4).
-for existing_box in "${existing_boxes[@]-}"; do
+# "${arr[@]+"${arr[@]}"}" safely expands a possibly-empty array under `set -u` even on Bash < 4.4 (the script's minimum documented Bash version is 4) — plain "${arr[@]-}" is broken: it substitutes one spurious empty-string element instead of zero when the array is genuinely empty, on every Bash version.
+for existing_box in "${existing_boxes[@]+"${existing_boxes[@]}"}"; do
     printf '\nRemoving container %s ...\n' "$existing_box"
     podman stop --time 10 "$existing_box" >/dev/null 2>&1 || true
     podman rm -f "$existing_box" >/dev/null
 done
 
+printf '\nRemoving old host commands and desktop entry ...\n'
 rm -f \
     "$host_bin/scummvm-nightly" \
     "$host_bin/scummvm-nightly-update" \
@@ -350,8 +394,8 @@ rm -rf "$nightly_root" "$nightly_cache"
 
 declare -a volume_args=()
 
-# "${arr[@]-}" avoids Bash's pre-4.4 nounset bug on an empty array (the script's minimum documented Bash version is 4).
-for path in "${normalized_mounts[@]-}"; do
+# "${arr[@]+"${arr[@]}"}" safely expands a possibly-empty array under `set -u` even on Bash < 4.4 (the script's minimum documented Bash version is 4) — plain "${arr[@]-}" is broken: it substitutes one spurious empty-string element instead of zero when the array is genuinely empty, on every Bash version.
+for path in "${normalized_mounts[@]+"${normalized_mounts[@]}"}"; do
     options="$mount_mode,rbind"
 
     if command -v findmnt >/dev/null 2>&1; then
@@ -369,12 +413,12 @@ for path in "${normalized_mounts[@]-}"; do
 done
 
 printf '\nCreating Distrobox %s ...\n' "$box_name"
-# "${arr[@]-}" avoids Bash's pre-4.4 nounset bug on an empty array (the script's minimum documented Bash version is 4).
+# "${arr[@]+"${arr[@]}"}" safely expands a possibly-empty array under `set -u` even on Bash < 4.4 (the script's minimum documented Bash version is 4) — plain "${arr[@]-}" is broken: it substitutes one spurious empty-string element instead of zero when the array is genuinely empty, on every Bash version.
 distrobox create \
     --yes \
     --image "$image" \
     --name "$box_name" \
-    "${volume_args[@]-}"
+    "${volume_args[@]+"${volume_args[@]}"}"
 
 run_in_box() {
     distrobox enter \
@@ -406,6 +450,7 @@ sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
     xz-utils
 '
 
+printf '\nStaging helper scripts ...\n'
 cat >"$stage/scummvm-nightly-update" <<'EOF'
 #!/usr/bin/env bash
 set -Eeuo pipefail
@@ -481,6 +526,7 @@ if [ ! -d "$data" ]; then
 fi
 
 if [ "$bindir" != "$new" ]; then
+    printf 'Flattening nested archive layout ...\n'
     # The nightly archive unpacks into a nested wrapper directory (e.g.
     # debian-x86-64-master-<hash>/scummvm/); promote its contents so the
     # binary and data folder live directly under the installed root.
@@ -495,9 +541,11 @@ if [ "$bindir" != "$new" ]; then
 fi
 
 if find "$persistent_data" -mindepth 1 -print -quit | grep -q .; then
+    printf 'Restoring persistent engine data ...\n'
     cp -a "$persistent_data"/. "$data"/
 fi
 
+printf 'Checking for missing shared libraries ...\n'
 missing="$(ldd "$binary" 2>/dev/null | awk '/not found/{print $1}')"
 
 if [ -n "$missing" ]; then
@@ -518,6 +566,7 @@ cd "$bindir"
 # (not deleted) after a successful update too, so a fallback build is
 # always available; the next update overwrites it with whatever build it
 # is replacing at that time.
+printf 'Installing the new build ...\n'
 rm -rf "$old"
 
 if [ -d "$target" ]; then
@@ -570,11 +619,13 @@ mkdir -p "$(dirname "$config")" "$saves"
 touch "$saves/timestamps"
 
 if command -v speech-dispatcher >/dev/null 2>&1; then
+    printf 'Starting Speech Dispatcher ...\n'
     speech-dispatcher --spawn >/dev/null 2>&1 || true
 fi
 
 cd "$bindir"
 
+printf 'Starting ScummVM Nightly ...\n'
 exec "$binary" \
     --config="$config" \
     --savepath="$saves" \
@@ -594,6 +645,7 @@ config="$HOME/.config/scummvm-nightly/scummvm.ini"
 saves="$HOME/.local/share/scummvm-nightly/saves"
 engine_data="$HOME/.local/share/scummvm-nightly/engine-data"
 
+printf 'ScummVM Nightly diagnostics\n============================\n\n'
 printf 'Configuration: %s\n' "$config"
 printf 'Save games:    %s\n' "$saves"
 printf 'Engine data:   %s\n' "$engine_data"
@@ -673,6 +725,8 @@ run_in_box sudo install -m 0755 \
 printf '\nDownloading and installing the current ScummVM nightly build ...\n'
 run_in_box /usr/local/bin/scummvm-nightly-update
 
+# The following three Flatpak import steps (config, saves, extras) are
+# independent and each individually gated by --no-flatpak-config.
 if [ "$copy_flatpak_config" -eq 1 ]; then
     flatpak_config=""
 
@@ -715,17 +769,12 @@ if [ "$copy_flatpak_config" -eq 1 ]; then
         )"
     fi
 
-    if [ -n "$flatpak_saves" ] && [ -d "$flatpak_saves" ] && find "$flatpak_saves" -mindepth 1 -print -quit | grep -q .; then
+    if [ -n "$flatpak_saves" ] && dir_has_content "$flatpak_saves"; then
         cp -au "$flatpak_saves"/. "$nightly_saves"/
         printf '\nExisting Flatpak save games copied to the nightly profile: %s\n' "$flatpak_saves"
     fi
 
-    flatpak_configured_savepath="$(
-        awk -F'=' '
-            /^\[/ { in_scummvm_section = ($0 == "[scummvm]") }
-            in_scummvm_section && $1 == "savepath" { sub(/^[^=]*=[[:space:]]*/, ""); print; exit }
-        ' "$nightly_config" 2>/dev/null
-    )"
+    flatpak_configured_savepath="$(read_ini_value savepath)"
 
     if [ -n "$flatpak_configured_savepath" ] && [ -d "$flatpak_configured_savepath" ]; then
         real_configured_savepath="$(readlink -f "$flatpak_configured_savepath")"
@@ -733,7 +782,7 @@ if [ "$copy_flatpak_config" -eq 1 ]; then
         [ -n "$flatpak_saves" ] && real_default_savepath="$(readlink -f "$flatpak_saves")"
 
         if [ "$real_configured_savepath" != "$real_default_savepath" ] \
-            && find "$flatpak_configured_savepath" -mindepth 1 -print -quit | grep -q .; then
+            && dir_has_content "$flatpak_configured_savepath"; then
             cp -au "$flatpak_configured_savepath"/. "$nightly_saves"/
             printf '\nSave games from the configured Flatpak save path were also copied, overwriting any older duplicates: %s\n' "$flatpak_configured_savepath"
         fi
@@ -741,33 +790,23 @@ if [ "$copy_flatpak_config" -eq 1 ]; then
 fi
 
 if [ "$copy_flatpak_config" -eq 1 ]; then
-    flatpak_extrapath="$(
-        awk -F'=' '
-            /^\[/ { in_scummvm_section = ($0 == "[scummvm]") }
-            in_scummvm_section && $1 == "extrapath" { sub(/^[^=]*=[[:space:]]*/, ""); print; exit }
-        ' "$nightly_config" 2>/dev/null
-    )"
+    flatpak_extrapath="$(read_ini_value extrapath)"
 
-    flatpak_iconspath="$(
-        awk -F'=' '
-            /^\[/ { in_scummvm_section = ($0 == "[scummvm]") }
-            in_scummvm_section && $1 == "iconspath" { sub(/^[^=]*=[[:space:]]*/, ""); print; exit }
-        ' "$nightly_config" 2>/dev/null
-    )"
+    flatpak_iconspath="$(read_ini_value iconspath)"
 
     flatpak_data="$flatpak_root/data/scummvm"
 
-    if [ -d "$flatpak_data" ] && find "$flatpak_data" -mindepth 1 -print -quit | grep -q .; then
+    if dir_has_content "$flatpak_data"; then
         cp -au "$flatpak_data"/. "$nightly_engine_data"/
         printf '\nFlatpak data folder contents copied to the nightly profile: %s\n' "$flatpak_data"
     fi
 
-    if [ -n "$flatpak_extrapath" ] && [ -d "$flatpak_extrapath" ] && find "$flatpak_extrapath" -mindepth 1 -print -quit | grep -q .; then
+    if [ -n "$flatpak_extrapath" ] && dir_has_content "$flatpak_extrapath"; then
         cp -au "$flatpak_extrapath"/. "$nightly_engine_data"/
         printf '\nFlatpak extras (Extra Path) folder contents copied to the nightly profile: %s\n' "$flatpak_extrapath"
     fi
 
-    if [ -n "$flatpak_iconspath" ] && [ -d "$flatpak_iconspath" ] && find "$flatpak_iconspath" -mindepth 1 -print -quit | grep -q .; then
+    if [ -n "$flatpak_iconspath" ] && dir_has_content "$flatpak_iconspath"; then
         cp -au "$flatpak_iconspath"/. "$nightly_engine_data"/
         printf '\nCustom shaders copied from the Flatpak icon path to the nightly profile: %s\n' "$flatpak_iconspath"
     fi
@@ -786,6 +825,7 @@ run_in_box distrobox-export \
     --bin /usr/local/bin/scummvm-nightly-doctor \
     --export-path "$host_bin"
 
+printf '\nCreating desktop entry ...\n'
 cat >"$desktop_file" <<EOF
 [Desktop Entry]
 Type=Application
