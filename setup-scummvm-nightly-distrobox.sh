@@ -5,6 +5,7 @@ box_name="scummvm-nightly"
 image="docker.io/library/debian:13"
 mount_mode="ro"
 copy_flatpak_config=1
+manage_with_chezmoi=1
 assume_yes=0
 discover_mounts=0
 declare -a requested_mounts=()
@@ -23,6 +24,7 @@ Options:
   --ro                     Mount additional paths read-only (default for custom mounts)
   --mount PATH             Mount an additional host path
   --no-flatpak-config      Do not import the Flatpak configuration
+  --no-chezmoi             Do not register the configuration file with chezmoi
   --box NAME               Use a different Distrobox name
   --image IMAGE            Use a different container image
   --help                   Show this help
@@ -42,6 +44,10 @@ instead of prompting.
 
 Paths added with --mount or --discover-mounts are read-only by default;
 pass --rw to make them read/write instead.
+
+If chezmoi is installed and already set up, the configuration file is
+registered with it automatically the first time it exists, so it can be
+tracked like any other dotfile. Pass --no-chezmoi to skip this.
 
 The existing nightly configuration is backed up.
 Existing nightly save games are not deleted.
@@ -76,6 +82,10 @@ while [ "$#" -gt 0 ]; do
             ;;
         --no-flatpak-config)
             copy_flatpak_config=0
+            shift
+            ;;
+        --no-chezmoi)
+            manage_with_chezmoi=0
             shift
             ;;
         --box)
@@ -809,6 +819,24 @@ if [ "$copy_flatpak_config" -eq 1 ]; then
     if [ -n "$flatpak_iconspath" ] && dir_has_content "$flatpak_iconspath"; then
         cp -au "$flatpak_iconspath"/. "$nightly_engine_data"/
         printf '\nCustom shaders copied from the Flatpak icon path to the nightly profile: %s\n' "$flatpak_iconspath"
+    fi
+fi
+
+# Optional: register the configuration file with chezmoi, if the user already
+# has it set up (binary present, source directory already initialized). Only
+# the config file is offered -- saves and engine data are unsuitable for
+# dotfile management (large, binary, machine-specific). Skipped once already
+# managed, so rebuilding never overwrites any template or encryption the user
+# has since applied to their chezmoi copy with the current plain file.
+if [ "$manage_with_chezmoi" -eq 1 ] && [ -f "$nightly_config" ] \
+    && command -v chezmoi >/dev/null 2>&1 \
+    && [ -d "$(chezmoi source-path 2>/dev/null)" ] \
+    && ! chezmoi source-path "$nightly_config" >/dev/null 2>&1; then
+    printf '\nAdding configuration to chezmoi: %s\n' "$nightly_config"
+    if chezmoi add "$nightly_config" >/dev/null 2>&1; then
+        printf 'Added to chezmoi. Review with: chezmoi diff\n'
+    else
+        printf 'Could not add configuration to chezmoi (non-fatal).\n' >&2
     fi
 fi
 
