@@ -27,6 +27,7 @@ The intention of this script is to make that easy and low-friction: install the 
 - [Flatpak Configuration Import](#flatpak-configuration-import)
 - [Flatpak Save Game Import](#flatpak-save-game-import)
 - [Flatpak Extras Import](#flatpak-extras-import)
+- [Chezmoi Integration](#chezmoi-integration)
 - [Profile and XDG Support](#profile-and-xdg-support)
 - [Default Paths](#default-paths)
 - [Additional Host Mounts](#additional-host-mounts)
@@ -53,6 +54,7 @@ The script:
 - preserves an existing nightly configuration when no Flatpak configuration exists
 - preserves save games and persistent engine data
 - optionally mounts additional host directories into the Distrobox when explicitly requested, read-only by default
+- registers the configuration file with chezmoi automatically, if chezmoi is already set up
 - creates host commands for launching, updating and diagnosing the installation
 - creates a desktop entry named **ScummVM Nightly**
 - checks for an update every time ScummVM Nightly starts
@@ -116,6 +118,7 @@ The first run downloads a container image, installs Debian packages and download
 | `--ro` | Mount additional host paths read-only. This is the default for custom mounts. |
 | `--mount PATH` | Add a host path. The option may be specified repeatedly. |
 | `--no-flatpak-config` | Do not import the Flatpak ScummVM configuration. |
+| `--no-chezmoi` | Do not register the configuration file with chezmoi (see [Chezmoi Integration](#chezmoi-integration)). |
 | `--box NAME` | Use a different Distrobox name. |
 | `--image IMAGE` | Use another Debian-compatible container image. |
 | `--nightly-url URL` | Override the official nightly archive URL. The archive must use the expected `.tar.xz` layout. |
@@ -277,6 +280,16 @@ Three source directories are copied in full, whichever of them exist and contain
 Because whole directories are copied as-is rather than filtered by file type, internal folder structure is preserved — this matters for shader packs, since ScummVM's `.glslp` presets reference sibling files by relative path. A side effect is that if the Flatpak data folder still has its `saves` subdirectory, a redundant copy of it may also land in the engine-data directory; this is harmless, since ScummVM does not look for save games there.
 
 Like the other Flatpak imports, this runs whenever Flatpak import isn't disabled (`--no-flatpak-config` skips it too).
+
+## Chezmoi Integration
+
+If [chezmoi](https://www.chezmoi.io/) is installed and already set up (it has an initialized source directory), the setup registers `scummvm.ini` with it automatically the first time the file exists — no separate action needed, and no new dependency is added if chezmoi isn't installed. Pass `--no-chezmoi` to skip this.
+
+Only the configuration file is registered. Save games and the persistent engine-data directory are deliberately left out — they're large, often binary, and machine-specific, which makes them a poor fit for dotfile management.
+
+This only happens the first time: if `scummvm.ini` is already managed by chezmoi, rebuilding never re-adds it. Running `chezmoi add` again on an already-managed file would overwrite chezmoi's copy with the current plain file, silently discarding any templating or encryption applied to it since — so once chezmoi is tracking the file, further updates go through chezmoi's own workflow (`chezmoi re-add`, `chezmoi diff`, `chezmoi apply`), not this script.
+
+Adding to chezmoi only updates its local source directory. Whether that change is committed or pushed anywhere depends entirely on the user's own chezmoi configuration (`autoCommit`, `autoPush`) — this script never runs `chezmoi apply`, `chezmoi git`, or anything beyond a plain `add`.
 
 ## Profile and XDG Support
 
