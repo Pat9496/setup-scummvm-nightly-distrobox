@@ -397,6 +397,7 @@ printf '\nRemoving old host commands and desktop entry ...\n'
 rm -f \
     "$host_bin/scummvm-nightly" \
     "$host_bin/scummvm-nightly-update" \
+    "$host_bin/update-scummvm-nightly" \
     "$host_bin/scummvm-nightly-doctor" \
     "$desktop_file"
 
@@ -729,6 +730,8 @@ run_in_box sudo install -m 0755 \
     "$stage/scummvm-nightly-update" \
     /usr/local/bin/scummvm-nightly-update
 
+run_in_box sudo ln -sf scummvm-nightly-update /usr/local/bin/update-scummvm-nightly
+
 run_in_box sudo install -m 0755 \
     "$stage/scummvm-nightly-doctor" \
     /usr/local/bin/scummvm-nightly-doctor
@@ -851,6 +854,10 @@ run_in_box distrobox-export \
     --export-path "$host_bin"
 
 run_in_box distrobox-export \
+    --bin /usr/local/bin/update-scummvm-nightly \
+    --export-path "$host_bin"
+
+run_in_box distrobox-export \
     --bin /usr/local/bin/scummvm-nightly-doctor \
     --export-path "$host_bin"
 
@@ -879,7 +886,7 @@ printf '\nRunning final check ...\n'
 
 printf '\nSetup complete.\n'
 printf 'Start:       scummvm-nightly\n'
-printf 'Update:      scummvm-nightly-update\n'
+printf 'Update:      scummvm-nightly-update (alias: update-scummvm-nightly)\n'
 printf 'Diagnostics: scummvm-nightly-doctor\n'
 printf 'Desktop:     ScummVM Nightly\n'
 printf 'Save games:  %s\n' "$nightly_saves"

@@ -152,7 +152,7 @@ Custom mounts (added with `--mount` or `--discover-mounts`) are read-only by def
 After setup, these commands are created in `~/.local/bin` by default:
 
 - `scummvm-nightly`
-- `scummvm-nightly-update`
+- `scummvm-nightly-update` (alias: `update-scummvm-nightly`)
 - `scummvm-nightly-doctor`
 
 ### Start ScummVM
@@ -174,6 +174,8 @@ SCUMMVM_NIGHTLY_SKIP_UPDATE=1 scummvm-nightly
 ```bash
 scummvm-nightly-update
 ```
+
+The alias `update-scummvm-nightly` runs the same command.
 
 ### Run Diagnostics
 
@@ -443,6 +445,8 @@ This is expected fallback behavior. Run the updater in a terminal to see the com
 scummvm-nightly-update
 ```
 
+(or the alias `update-scummvm-nightly`)
+
 ### The New Nightly Is Missing a Shared Library
 
 Run:
@@ -481,6 +485,7 @@ Remove the Distrobox and generated launchers:
 DBX_CONTAINER_MANAGER=podman distrobox rm -f scummvm-nightly
 rm -f ~/.local/bin/scummvm-nightly \
       ~/.local/bin/scummvm-nightly-update \
+      ~/.local/bin/update-scummvm-nightly \
       ~/.local/bin/scummvm-nightly-doctor \
       ~/.local/share/applications/scummvm-nightly.desktop
 ```
